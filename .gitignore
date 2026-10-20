@@ -10,6 +10,8 @@ temp/
 build/
 *.o
 *.a
+__pycache__/
+*.pyc
 
 # MkDocs
 site/
