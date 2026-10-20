@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: bash scripts/ci-setup.sh
+      - name: Run tests
+        run: bash scripts/run-tests.sh
+      - name: Check generated
+        run: bash scripts/check-generated.sh
+
+  docs:
+    name: Docs build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install MkDocs
+        run: pip install -r requirements-docs.txt
+      - name: Build site
+        run: mkdocs build --strict
