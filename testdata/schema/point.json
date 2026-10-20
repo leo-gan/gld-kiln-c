@@ -1,0 +1,10 @@
+{
+  "title": "Point",
+  "type": "object",
+  "properties": {
+    "x": {"type": "integer", "format": "int32"},
+    "y": {"type": "integer", "format": "int32"},
+    "label": {"type": "string"}
+  },
+  "required": ["x", "y"]
+}
