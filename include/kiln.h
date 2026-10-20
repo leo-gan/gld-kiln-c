@@ -10,7 +10,7 @@
 extern "C" {
 #endif
 
-#define KILN_VERSION "0.1.0"
+#define KILN_VERSION "0.2.0"
 #define KILN_CAP_DEFAULT 16777216u
 #define KILN_DEPTH_MAX 64
 
