@@ -24,6 +24,7 @@ that program on the file.
 | --- | --- |
 | `testdata/schema/point.json` | `Point`, with optional `label`. |
 | `testdata/schema/message.json` | `Message` and nested `Meta`. |
+| `testdata/schema/batch.json` | `Batch`, with `f32` and `i64` lists, bools, and binary strings. |
 
 `bash scripts/check-generated.sh` writes those files again and diffs them
 against `tests/generated`. A drift fails the check.

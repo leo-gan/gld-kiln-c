@@ -1,0 +1,11 @@
+{
+  "title": "Batch",
+  "type": "object",
+  "properties": {
+    "values": {"type": "array", "items": {"type": "number", "format": "float"}},
+    "ids": {"type": "array", "items": {"type": "integer", "format": "int64"}},
+    "flags": {"type": "array", "items": {"type": "boolean"}},
+    "raw": {"type": "array", "items": {"type": "string", "format": "binary"}}
+  },
+  "required": ["values", "ids", "flags", "raw"]
+}

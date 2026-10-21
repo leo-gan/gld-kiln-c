@@ -29,7 +29,7 @@ GCC 11.4 or a newer C11 compiler is enough. The flags are `-std=c11 -Wall
 | `bash scripts/run-tests.sh` | The 46 wire cases, generated structs, and the Python oracle. |
 | `bash scripts/generate.sh` | Writes `tests/generated` from `testdata/schema`. |
 | `bash scripts/check-generated.sh` | Regenerates into a temp directory and diffs. |
-| `bash scripts/run-microbench.sh` | Prints nanoseconds for a struct batch and one f32 tensor. |
+| `bash scripts/run-microbench.sh` | Prints nanoseconds for a 4096-struct batch and a 1,048,576-float list and tensor. Decode copies into a reused buffer. |
 
 ## Decode and encode
 

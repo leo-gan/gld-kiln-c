@@ -840,6 +840,178 @@ static int roundtrip_main(int argc, char **argv, int framed) {
     return 0;
 }
 
+static uint32_t bits_of(float v) {
+    uint32_t b;
+    memcpy(&b, &v, 4);
+    return b;
+}
+
+static void check_bulk_copy(void) {
+    kiln_arena *arena = kiln_arena_new();
+    kiln_schema *f32;
+    kiln_schema *list;
+    kiln_schema *u32;
+    kiln_schema *u32s;
+    kiln_value batch;
+    kiln_buf buf;
+    kiln_doc *doc = NULL;
+    kiln_tensor tensor;
+    kiln_value one;
+    uint8_t wire[12];
+    uint8_t uwire[8];
+    float host[2];
+    float back[2];
+    uint32_t one_u32;
+    uint64_t wide;
+    uint8_t *enc = NULL;
+    size_t en = 0;
+    const uint32_t neg0 = 0x80000000u;
+    const uint32_t qnan = 0x7fc00000u;
+    if (!arena) {
+        die("arena");
+    }
+    f32 = kiln_schema_new(arena, KILN_F32);
+    list = kiln_schema_new(arena, KILN_LIST);
+    u32 = kiln_schema_new(arena, KILN_U32);
+    u32s = kiln_schema_new(arena, KILN_LIST);
+    if (!f32 || !list || !u32 || !u32s) {
+        die("schema");
+    }
+    list->elem = f32;
+    u32s->elem = u32;
+    if (kiln_bulk_copy(NULL, NULL, 0, 4) != KILN_OK || kiln_bulk_copy(host, wire, 1, 3) != KILN_ERR_TYPE ||
+        kiln_bulk_copy(host, wire, 1, 6) != KILN_ERR_TYPE ||
+        kiln_bulk_copy(host, wire, (SIZE_MAX / 8u) + 1u, 8) != KILN_ERR_LIMIT) {
+        die("bulk width");
+    }
+    {
+        uint8_t p4[4];
+        uint8_t p8[8];
+        float sf;
+        double sd;
+        uint64_t dbits = 0x7FF8000000000001ULL;
+        kiln_store_f32(p4, -0.0f);
+        if (kiln_load_u32(p4) != neg0 || bits_of(kiln_load_f32(p4)) != neg0) {
+            die("f32 neg0");
+        }
+        memcpy(&sf, &qnan, 4);
+        kiln_store_f32(p4, sf);
+        if (kiln_load_u32(p4) != qnan || bits_of(kiln_load_f32(p4)) != qnan) {
+            die("f32 qnan");
+        }
+        memcpy(&sd, &dbits, 8);
+        kiln_store_f64(p8, sd);
+        sd = kiln_load_f64(p8);
+        memcpy(&dbits, &sd, 8);
+        if (kiln_load_u64(p8) != 0x7FF8000000000001ULL || dbits != 0x7FF8000000000001ULL) {
+            die("f64 nan");
+        }
+    }
+    kiln_store_u32(wire, 2);
+    kiln_store_u32(wire + 4, neg0);
+    kiln_store_u32(wire + 8, qnan);
+    if (kiln_decode(list, wire, sizeof wire, NULL, &doc) != KILN_OK) {
+        die("f32 list decode");
+    }
+    if (kiln_list_load(&doc->root, host, 2, 8) != KILN_ERR_TYPE) {
+        die("f32 widened");
+    }
+    if (kiln_list_load(&doc->root, host, 2, 4) != KILN_OK || bits_of(host[0]) != neg0 || bits_of(host[1]) != qnan) {
+        die("f32 bits");
+    }
+    memset(&batch, 0, sizeof batch);
+    batch.kind = KILN_LIST;
+    batch.as.list.count = 2;
+    batch.as.list.bulk = 1;
+    batch.as.list.elem_size = 4;
+    batch.as.list.raw = wire + 4;
+    kiln_buf_init(&buf);
+    if (kiln_encode_buf(list, &batch, &buf) != KILN_OK || buf.len != sizeof wire || memcmp(buf.data, wire, sizeof wire) != 0) {
+        die("f32 list encode");
+    }
+    batch.as.list.elem_size = 8;
+    if (kiln_encode_buf(list, &batch, &buf) != KILN_ERR_TYPE) {
+        die("f32 elem width");
+    }
+    kiln_doc_free(doc);
+    doc = NULL;
+    kiln_store_u32(uwire, 1);
+    kiln_store_u32(uwire + 4, 1);
+    if (kiln_decode(u32s, uwire, sizeof uwire, NULL, &doc) != KILN_OK) {
+        die("u32 list");
+    }
+    wide = 0;
+    if (kiln_list_load(&doc->root, &wide, 1, 8) != KILN_ERR_TYPE || wide != 0) {
+        die("u32 widened");
+    }
+    if (kiln_list_load(&doc->root, &one_u32, 1, 4) != KILN_OK || one_u32 != 1) {
+        die("u32 load");
+    }
+    kiln_doc_free(doc);
+    doc = NULL;
+    {
+        kiln_value items[2];
+        kiln_value uitem;
+        memset(items, 0, sizeof items);
+        items[0].kind = KILN_F32;
+        items[0].as.f32_bits = neg0;
+        items[1].kind = KILN_F32;
+        items[1].as.f32_bits = qnan;
+        memset(&batch, 0, sizeof batch);
+        batch.kind = KILN_LIST;
+        batch.as.list.count = 2;
+        batch.as.list.items = items;
+        if (kiln_encode_buf(list, &batch, &buf) != KILN_OK || buf.len != sizeof wire ||
+            memcmp(buf.data, wire, sizeof wire) != 0) {
+            die("tagged f32");
+        }
+        memset(&uitem, 0, sizeof uitem);
+        uitem.kind = KILN_U32;
+        uitem.as.u64 = 1;
+        batch.as.list.count = 1;
+        batch.as.list.items = &uitem;
+        if (kiln_encode_buf(u32s, &batch, &buf) != KILN_OK || buf.len != 8 || memcmp(buf.data, uwire, 8) != 0) {
+            die("tagged u32 width");
+        }
+    }
+    kiln_tensor_clear(&tensor);
+    tensor.dtype = 2;
+    tensor.rank = 1;
+    tensor.shape[0] = 2;
+    tensor.data = wire + 4;
+    tensor.data_len = 8;
+    memset(&one, 0, sizeof one);
+    one.kind = KILN_TENSORS;
+    one.as.tensors.items = &tensor;
+    one.as.tensors.count = 1;
+    if (kiln_encode(&SCH_TENSORS, &one, &enc, &en) != KILN_OK || en < 200) {
+        die("tensor encode");
+    }
+    if (kiln_decode(&SCH_TENSORS, enc, en, NULL, &doc) != KILN_OK) {
+        die("tensor decode");
+    }
+    if (kiln_tensor_load(&doc->root.as.tensors.items[0], back, 2, 8) != KILN_ERR_TYPE) {
+        die("tensor widened");
+    }
+    if (kiln_tensor_load(&doc->root.as.tensors.items[0], back, 2, 4) != KILN_OK || bits_of(back[0]) != neg0 ||
+        bits_of(back[1]) != qnan) {
+        die("tensor bits");
+    }
+    if (memcmp(doc->root.as.tensors.items[0].data, wire + 4, 8) != 0) {
+        die("tensor borrow");
+    }
+    kiln_doc_free(doc);
+    doc = NULL;
+    one.as.tensors.items = NULL;
+    one.as.tensors.count = 1;
+    if (kiln_encode_buf(&SCH_TENSORS, &one, &buf) != KILN_ERR_TYPE) {
+        die("null tensors");
+    }
+    free(enc);
+    kiln_buf_free(&buf);
+    kiln_arena_free(arena);
+}
+
 int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "roundtrip") == 0) {
         return roundtrip_main(argc, argv, 0);
@@ -848,5 +1020,6 @@ int main(int argc, char **argv) {
         return roundtrip_main(argc, argv, 1);
     }
     check_hash();
+    check_bulk_copy();
     return run_cases();
 }

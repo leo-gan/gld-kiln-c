@@ -3,7 +3,7 @@ CFLAGS ?= -std=c11 -Wall -Wextra -Werror -O2 -Iinclude -Isrc
 SAN ?= -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude -Isrc
 
 LIB_SRC = src/kiln.c src/codec.c src/json.c src/schema_json.c
-GEN = tests/generated/point.c tests/generated/message.c
+GEN = tests/generated/point.c tests/generated/message.c tests/generated/batch.c
 
 .PHONY: all test clean bench generate
 
@@ -32,11 +32,12 @@ build/gld-kilngen-c: src/kilngen.c src/json.c src/json.h include/kiln.h | build
 build/kiln-tests: tests/test_v2_cases.c build/libkiln-san.a | build
 	$(CC) $(SAN) -o $@ tests/test_v2_cases.c -Lbuild -lkiln-san
 
-build/test-generated: build/gld-kilngen-c build/libkiln-san.a tests/test_generated.c testdata/schema/point.json testdata/schema/message.json
+build/test-generated: build/gld-kilngen-c build/libkiln-san.a tests/test_generated.c testdata/schema/point.json testdata/schema/message.json testdata/schema/batch.json
 	mkdir -p tests/generated
 	./build/gld-kilngen-c --schema testdata/schema/point.json --out tests/generated
 	./build/gld-kilngen-c --schema testdata/schema/message.json --out tests/generated
-	$(CC) $(SAN) -Itests/generated -o $@ tests/test_generated.c tests/generated/point.c tests/generated/message.c -Lbuild -lkiln-san
+	./build/gld-kilngen-c --schema testdata/schema/batch.json --out tests/generated
+	$(CC) $(SAN) -Itests/generated -o $@ tests/test_generated.c tests/generated/point.c tests/generated/message.c tests/generated/batch.c -Lbuild -lkiln-san
 
 build/kiln-bench: benches/bench.c build/libkiln.a | build
 	$(CC) $(CFLAGS) -o $@ benches/bench.c -Lbuild -lkiln
@@ -48,6 +49,7 @@ generate: build/gld-kilngen-c
 	mkdir -p tests/generated
 	./build/gld-kilngen-c --schema testdata/schema/point.json --out tests/generated
 	./build/gld-kilngen-c --schema testdata/schema/message.json --out tests/generated
+	./build/gld-kilngen-c --schema testdata/schema/batch.json --out tests/generated
 
 test: build/kiln-tests build/test-generated
 	./build/kiln-tests

@@ -103,14 +103,18 @@ static int ident_ok(const char *s) {
 }
 
 static GType *scalar(int kind) {
-    static GType table[12];
+    /* GK_BOOL .. GK_BYTES. GK_BYTES is past the old 12-slot table. */
+    static GType table[GK_BYTES + 1];
     static int ready;
     if (!ready) {
         int i;
-        for (i = 0; i < 12; i++) {
+        for (i = 0; i <= GK_BYTES; i++) {
             table[i].kind = i;
         }
         ready = 1;
+    }
+    if (kind < 0 || kind > GK_BYTES) {
+        die("bad scalar");
     }
     return &table[kind];
 }
@@ -735,8 +739,17 @@ static void emit_encode_field2(FILE *f, const GField *field) {
         int ew = scalar_width(t->elem->kind);
         fprintf(f, "        if (v->%s_count > 0xffffffffu) return KILN_ERR_LIMIT;\n", field->name);
         fprintf(f, "        kiln_store_u32(dst + pos, (uint32_t)v->%s_count);\n        pos += 4;\n", field->name);
-        fprintf(f, "        {\n            size_t i;\n            for (i = 0; i < v->%s_count; i++) {\n", field->name);
-        if (ew) {
+        if (ew && t->elem->kind != GK_BOOL) {
+            /* Host numeric array. Width matches the wire slot; bool stays scalar. */
+            fprintf(f, "        if (v->%s_count) {\n", field->name);
+            fprintf(f, "            kiln_err err = kiln_bulk_copy(dst + pos, v->%s, v->%s_count, %d);\n",
+                field->name, field->name, ew);
+            fprintf(f, "            if (err) return err;\n");
+            fprintf(f, "            pos += v->%s_count * %du;\n        }\n", field->name, ew);
+        } else fprintf(f, "        {\n            size_t i;\n            for (i = 0; i < v->%s_count; i++) {\n", field->name);
+        if (ew && t->elem->kind != GK_BOOL) {
+            /* bulk copy already emitted */
+        } else if (ew) {
             snprintf(access, sizeof access, "v->%s[i]", field->name);
             fprintf(f, "            ");
             if (t->elem->kind == GK_BOOL || t->elem->kind == GK_I8 || t->elem->kind == GK_U8) {
@@ -758,7 +771,9 @@ static void emit_encode_field2(FILE *f, const GField *field) {
         } else {
             die("cannot encode list element");
         }
-        fprintf(f, "            }\n        }\n");
+        if (!(ew && t->elem->kind != GK_BOOL)) {
+            fprintf(f, "            }\n        }\n");
+        }
     } else {
         die("cannot encode field");
     }
@@ -822,7 +837,11 @@ static void emit_decode_field(FILE *f, const char *parent, const GField *field) 
     } else if (t->kind == GK_LIST) {
         size_t min = type_min(t->elem);
         int ew = scalar_width(t->elem->kind);
-        fprintf(f, "        {\n            uint32_t count;\n            size_t i;\n");
+        int bulk = ew && t->elem->kind != GK_BOOL;
+        fprintf(f, "        {\n            uint32_t count;\n");
+        if (!bulk) {
+            fprintf(f, "            size_t i;\n");
+        }
         fprintf(f, "            if (pos + 4 > len) return %s_fail(out, KILN_ERR_EOF);\n", cur_struct);
         fprintf(f, "            count = kiln_load_u32(src + pos);\n            pos += 4;\n");
         fprintf(f, "            if ((uint64_t)count > KILN_CAP_DEFAULT) return %s_fail(out, KILN_ERR_LIMIT);\n", cur_struct);
@@ -830,6 +849,16 @@ static void emit_decode_field(FILE *f, const char *parent, const GField *field) 
             fprintf(f, "            if ((uint64_t)count > (len - pos) / %zuu) return %s_fail(out, KILN_ERR_EOF);\n", min, cur_struct);
         }
         fprintf(f, "            out->%s = NULL;\n            out->%s_count = count;\n", field->name, field->name);
+        if (bulk) {
+            fprintf(f, "            if (count) {\n");
+            fprintf(f, "                out->%s = malloc((size_t)count * sizeof *out->%s);\n", field->name, field->name);
+            fprintf(f, "                if (!out->%s) { out->%s_count = 0; return %s_fail(out, KILN_ERR_LIMIT); }\n",
+                field->name, field->name, cur_struct);
+            fprintf(f, "                if (kiln_bulk_copy(out->%s, src + pos, count, %d)) return %s_fail(out, KILN_ERR_TYPE);\n",
+                field->name, ew, cur_struct);
+            fprintf(f, "                pos += (size_t)count * %du;\n", ew);
+            fprintf(f, "            }\n        }\n");
+        } else {
         fprintf(f, "            if (count) {\n                out->%s = calloc(count, sizeof *out->%s);\n", field->name, field->name);
         fprintf(f, "                if (!out->%s) { out->%s_count = 0; return %s_fail(out, KILN_ERR_LIMIT); }\n", field->name, field->name, cur_struct);
         fprintf(f, "            }\n            for (i = 0; i < count; i++) {\n");
@@ -850,6 +879,7 @@ static void emit_decode_field(FILE *f, const char *parent, const GField *field) 
             die("cannot decode list element");
         }
         fprintf(f, "            }\n        }\n");
+        }
     } else {
         die("cannot decode field");
     }

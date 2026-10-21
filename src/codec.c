@@ -45,6 +45,72 @@ static kiln_err align64_u(uint64_t n, uint64_t *out) {
     return KILN_OK;
 }
 
+kiln_err kiln_bulk_copy(void *dst, const void *src, size_t count, size_t width) {
+    size_t nbytes;
+    if (width != 1 && width != 2 && width != 4 && width != 8) {
+        return KILN_ERR_TYPE;
+    }
+    if (count > SIZE_MAX / width) {
+        return KILN_ERR_LIMIT;
+    }
+    nbytes = count * width;
+    if (nbytes == 0) {
+        return KILN_OK;
+    }
+    if (!dst || !src) {
+        return KILN_ERR_TYPE;
+    }
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    {
+        const uint8_t *s = src;
+        uint8_t *d = dst;
+        size_t i;
+        size_t b;
+        for (i = 0; i < count; i++) {
+            for (b = 0; b < width; b++) {
+                d[b] = s[width - 1u - b];
+            }
+            d += width;
+            s += width;
+        }
+    }
+#else
+    memcpy(dst, src, nbytes);
+#endif
+    return KILN_OK;
+}
+
+kiln_err kiln_list_load(const kiln_value *list, void *dst, size_t count, size_t width) {
+    if (!list || list->kind != KILN_LIST || !list->as.list.bulk) {
+        return KILN_ERR_TYPE;
+    }
+    if (list->as.list.elem_size != width || list->as.list.count != count) {
+        return KILN_ERR_TYPE;
+    }
+    if (count == 0) {
+        return KILN_OK;
+    }
+    return kiln_bulk_copy(dst, list->as.list.raw, count, width);
+}
+
+kiln_err kiln_tensor_load(const kiln_tensor *tensor, void *dst, size_t count, size_t width) {
+    size_t nbytes;
+    if (!tensor || (width != 1 && width != 2 && width != 4 && width != 8)) {
+        return KILN_ERR_TYPE;
+    }
+    if (count > SIZE_MAX / width) {
+        return KILN_ERR_LIMIT;
+    }
+    nbytes = count * width;
+    if (tensor->data_len != nbytes) {
+        return KILN_ERR_TYPE;
+    }
+    if (nbytes == 0) {
+        return KILN_OK;
+    }
+    return kiln_bulk_copy(dst, tensor->data, count, width);
+}
+
 static kiln_err element_count(uint8_t rank, const uint64_t *shape, uint64_t *out) {
     uint64_t count = 1;
     uint8_t i;
@@ -945,6 +1011,61 @@ static void sort_keys(size_t *idx, size_t n, const kiln_value *keys) {
     }
 }
 
+/* One unnamed tensor: 192-byte directory, then one payload copy. */
+static kiln_err enc_one_tensor(const kiln_tensor *item, kiln_buf *buf) {
+    size_t total;
+    size_t start;
+    size_t dim;
+    uint8_t *block;
+    uint8_t *d;
+    kiln_err err;
+    if (item->data_len > SIZE_MAX - 192u) {
+        return KILN_ERR_LIMIT;
+    }
+    total = 192u + item->data_len;
+    start = buf->len;
+    err = kiln_buf_reserve(buf, total);
+    if (err) {
+        return err;
+    }
+    block = buf->data + start;
+    memset(block, 0, 192u);
+    memcpy(block, "KLNT", 4);
+    block[4] = 2;
+    block[5] = (uint8_t)KILN_FLAG_LE;
+    kiln_store_u32(block + 8, 1);
+    kiln_store_u32(block + 12, 0);
+    kiln_store_u64(block + 16, item->data_len);
+    kiln_store_u64(block + 24, KILN_DESC);
+    d = block + KILN_HEADER;
+    kiln_store_u16(d + 0, item->dtype);
+    d[2] = item->rank;
+    kiln_store_u16(d + 4, 0xFFFF);
+    kiln_store_u16(d + 6, 0);
+    kiln_store_u16(d + 8, 0xFFFF);
+    kiln_store_u16(d + 10, 0);
+    kiln_store_u32(d + 12, item->block_size);
+    kiln_store_u16(d + 16, item->quant_scheme);
+    kiln_store_u16(d + 18, item->quant_axis);
+    kiln_store_u32(d + 20, item->group_size);
+    kiln_store_u32(d + 24, item->scale_index);
+    kiln_store_u32(d + 28, item->outer_index);
+    kiln_store_u64(d + 32, 0);
+    kiln_store_u64(d + 40, item->data_len);
+    for (dim = 0; dim < 8; dim++) {
+        kiln_store_u64(d + 48 + 8 * dim, item->shape[dim]);
+    }
+    if (item->data_len) {
+        if (item->data) {
+            memcpy(block + 192, item->data, item->data_len);
+        } else {
+            memset(block + 192, 0, item->data_len);
+        }
+    }
+    buf->len = start + total;
+    return KILN_OK;
+}
+
 static kiln_err enc_tensors(const kiln_value *value, kiln_buf *buf) {
     const kiln_tensor *items = value->as.tensors.items;
     size_t count = value->as.tensors.count;
@@ -967,7 +1088,16 @@ static kiln_err enc_tensors(const kiln_value *value, kiln_buf *buf) {
     if (count > 0xFFFFFFFFu) {
         return KILN_ERR_LIMIT;
     }
+    if (count && !items) {
+        return KILN_ERR_TYPE;
+    }
+    if (count == 1 && !items[0].name_len && !items[0].layout_len) {
+        return enc_one_tensor(items, buf);
+    }
     for (index = 0; index < count; index++) {
+        if ((items[index].name_len && !items[index].name) || (items[index].layout_len && !items[index].layout)) {
+            return KILN_ERR_TYPE;
+        }
         if (items[index].name_len) {
             any_name = 1;
             if (items[index].name_len > 0xFFFF) {
@@ -1088,8 +1218,13 @@ static kiln_err enc_tensors(const kiln_value *value, kiln_buf *buf) {
                 memset(block + (size_t)payload_base + (size_t)prev, 0, (size_t)(off - prev));
             }
         }
-        if (items[index].data_len && items[index].data) {
-            memcpy(block + (size_t)payload_base + (size_t)off, items[index].data, items[index].data_len);
+        if (items[index].data_len) {
+            uint8_t *slot = block + (size_t)payload_base + (size_t)off;
+            if (items[index].data) {
+                memcpy(slot, items[index].data, items[index].data_len);
+            } else {
+                memset(slot, 0, items[index].data_len);
+            }
         }
     }
     free(heap_offs);
@@ -1190,8 +1325,46 @@ static kiln_err enc_value(const kiln_schema *schema, const kiln_value *value, ki
             return err;
         }
         if (value->as.list.bulk) {
-            size_t nbytes = count * value->as.list.elem_size;
+            size_t fixed = 0;
+            size_t nbytes;
+            /* raw is already little-endian wire bytes, not a widened host slot. */
+            if (!schema->elem || !kiln_fixed_size(schema->elem, &fixed) || fixed != value->as.list.elem_size) {
+                return KILN_ERR_TYPE;
+            }
+            if (fixed != 0 && count > SIZE_MAX / fixed) {
+                return KILN_ERR_LIMIT;
+            }
+            nbytes = count * fixed;
+            if (nbytes && !value->as.list.raw) {
+                return KILN_ERR_TYPE;
+            }
             return app(buf, value->as.list.raw, nbytes);
+        }
+        /* Tagged scalars: one reserve, then direct stores. Structs stay recursive. */
+        if (schema->elem && schema->elem->kind != KILN_STRUCT && kiln_fixed_size(schema->elem, &width)) {
+            size_t nbytes = 0;
+            uint8_t *dst;
+            if (count && !value->as.list.items) {
+                return KILN_ERR_TYPE;
+            }
+            if (width != 0 && count > SIZE_MAX / width) {
+                return KILN_ERR_LIMIT;
+            }
+            nbytes = count * width;
+            err = kiln_buf_reserve(buf, nbytes);
+            if (err) {
+                return err;
+            }
+            dst = buf->data + buf->len;
+            for (i = 0; i < count; i++) {
+                err = enc_fixed_scalar(&value->as.list.items[i], dst);
+                if (err) {
+                    return err;
+                }
+                dst += width;
+            }
+            buf->len += nbytes;
+            return KILN_OK;
         }
         for (i = 0; i < count; i++) {
             err = enc_value(schema->elem, &value->as.list.items[i], buf);

@@ -1,6 +1,7 @@
 #include "kiln.h"
 #include "point.h"
 #include "message.h"
+#include "batch.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -161,9 +162,65 @@ static void test_message(void) {
     Meta_free(&meta_out);
 }
 
+static void test_batch(void) {
+    Batch in;
+    Batch out;
+    uint8_t buf[64];
+    size_t n = 0;
+    float values[3];
+    int64_t ids[2];
+    int flags[3];
+    uint8_t raw_bytes[2] = {0x00, 0xff};
+    Batch_raw_item raw[1];
+    uint32_t neg0 = 0x80000000u;
+    uint32_t qnan = 0x7fc00000u;
+    uint32_t one = 0x3f800000u;
+    memset(&in, 0, sizeof in);
+    memcpy(&values[0], &neg0, 4);
+    memcpy(&values[1], &qnan, 4);
+    memcpy(&values[2], &one, 4);
+    ids[0] = -1;
+    ids[1] = 42;
+    flags[0] = 1;
+    flags[1] = 0;
+    flags[2] = 2;
+    in.values = values;
+    in.values_count = 3;
+    in.ids = ids;
+    in.ids_count = 2;
+    in.flags = flags;
+    in.flags_count = 3;
+    raw[0].data = raw_bytes;
+    raw[0].len = 2;
+    in.raw = raw;
+    in.raw_count = 1;
+    expect(Batch_encode(&in, buf, sizeof buf, &n) == KILN_OK, "batch encode");
+    expect(Batch_encoded_size(&in) == n, "batch size");
+    expect(Batch_decode(&out, buf, n) == KILN_OK, "batch decode");
+    expect(out.values_count == 3 && out.ids_count == 2 && out.flags_count == 3 && out.raw_count == 1, "batch counts");
+    expect(out.values && memcmp(out.values, values, sizeof values) == 0, "batch f32 bits");
+    expect(out.ids && out.ids[0] == -1 && out.ids[1] == 42, "batch ids");
+    expect(out.flags && out.flags[0] == 1 && out.flags[1] == 0 && out.flags[2] == 1, "batch flags");
+    expect(out.raw && out.raw[0].len == 2 && out.raw[0].data && memcmp(out.raw[0].data, raw_bytes, 2) == 0, "batch bytes");
+    Batch_free(&out);
+    in.values_count = 0;
+    in.values = NULL;
+    in.ids_count = 0;
+    in.ids = NULL;
+    in.flags_count = 0;
+    in.flags = NULL;
+    in.raw_count = 0;
+    in.raw = NULL;
+    expect(Batch_encode(&in, buf, sizeof buf, &n) == KILN_OK && n == 16, "empty lists");
+    expect(Batch_decode(&out, buf, n) == KILN_OK && out.values_count == 0 && !out.values && out.raw_count == 0,
+        "empty decode");
+    Batch_free(&out);
+}
+
 int main(void) {
     test_point();
     test_message();
+    test_batch();
     if (fails) {
         fprintf(stderr, "%d generated failure(s)\n", fails);
         return 1;
