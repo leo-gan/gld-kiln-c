@@ -248,30 +248,61 @@ static inline void kiln_store_i64(uint8_t *p, int64_t v) {
 }
 
 static inline void kiln_store_f32(uint8_t *p, float v) {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
     uint32_t bits;
     memcpy(&bits, &v, 4);
     kiln_store_u32(p, bits);
+#else
+    /* Little-endian host: the float's bits are already the wire image. */
+    memcpy(p, &v, 4);
+#endif
 }
 
 static inline void kiln_store_f64(uint8_t *p, double v) {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
     uint64_t bits;
     memcpy(&bits, &v, 8);
     kiln_store_u64(p, bits);
+#else
+    memcpy(p, &v, 8);
+#endif
 }
 
 static inline float kiln_load_f32(const uint8_t *p) {
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
     uint32_t bits = kiln_load_u32(p);
     float v;
     memcpy(&v, &bits, 4);
     return v;
+#else
+    float v;
+    memcpy(&v, p, 4);
+    return v;
+#endif
 }
 
 static inline double kiln_load_f64(const uint8_t *p) {
-    uint64_t bits = kiln_load_u64(p);
     double v;
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    uint64_t bits = kiln_load_u64(p);
     memcpy(&v, &bits, 8);
+#else
+    memcpy(&v, p, 8);
+#endif
     return v;
 }
+
+/* Copy `count` scalars of `width` 1, 2, 4, or 8. On a little-endian host this
+   is one memcpy of count * width. A 4-byte value is not widened into 8 bytes.
+   Byte swap on big-endian is symmetric, so the same call converts host to
+   little-endian wire and wire back to host. The ranges must not overlap. */
+kiln_err kiln_bulk_copy(void *dst, const void *src, size_t count, size_t width);
+
+/* Copy a bulk fixed-width list into host scalars. `width` must equal elem_size. */
+kiln_err kiln_list_load(const kiln_value *list, void *dst, size_t count, size_t width);
+
+/* Copy one tensor payload into host scalars. `count * width` must equal data_len. */
+kiln_err kiln_tensor_load(const kiln_tensor *tensor, void *dst, size_t count, size_t width);
 
 #ifdef __cplusplus
 }

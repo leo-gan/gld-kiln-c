@@ -56,3 +56,8 @@ message that is followed by more bytes in a larger buffer.
 A decoded `tensors` value points `data` at the input buffer. The caller keeps
 that buffer alive for as long as the view is used. Re-encoding copies those
 bytes into a new canonical directory. The input itself is not modified.
+
+`kiln_list_load` and `kiln_tensor_load` copy a borrowed numeric payload into
+caller memory. Pass the same destination on the next decode. On a little-endian
+host that copy is one `memcpy` of `count * width`. Width is 4 for `f32` and 8
+for `f64` or `i64`, so a `u32` list is not written into 8-byte slots.

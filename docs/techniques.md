@@ -13,7 +13,10 @@ does not fit, returns before a descriptor array exists. The test counter
 
 Fixed-width lists do not allocate elements at all. The value holds a pointer
 into the input and a byte length. Encode writes the count and copies that
-slice once.
+slice once. `kiln_list_load` and `kiln_tensor_load` copy that slice into a
+caller buffer. On a little-endian host `kiln_bulk_copy` is one `memcpy` of
+`count * width`. Width is 1, 2, 4, or 8, so a 4-byte list is never written
+into 8-byte slots. The caller can reuse the destination across decodes.
 
 ## Tensor payloads
 
@@ -36,6 +39,8 @@ shapes. Those are payload.
 ## Generated code
 
 Generated `decode` uses the same cap and the same minimum-size check as the
-dynamic reader. A short list returns `EOF` before `calloc`. Strings are copied
+dynamic reader. A short list returns `EOF` before it allocates. Numeric lists
+call `kiln_bulk_copy` into `malloc` storage instead of storing one scalar at
+a time. Bool lists stay scalar so only 0 and 1 are written. Strings are copied
 so the caller can free the input buffer. Tensor fields are not part of the
 JSON Schema subset, so generated structs do not borrow a directory.
