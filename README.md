@@ -1,5 +1,7 @@
 # gld-kiln-c
 
+[Serialization](https://leo-gan.github.io/serialization/) is the hub for the theory, the history, and the benchmarks.
+
 A from-scratch Kiln library for C. The runtime and the code generator are C.
 They do not wrap, link, or vendor a Kiln library written in another language.
 
