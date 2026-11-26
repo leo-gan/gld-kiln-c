@@ -189,6 +189,23 @@ kiln_schema *kiln_schema_new(kiln_arena *arena, kiln_kind kind) {
 
 int kiln_utf8_ok(const uint8_t *s, size_t n) {
     size_t i = 0;
+#if defined(__SSE2__)
+    while (i + 16 <= n) {
+        __m128i chunk = _mm_loadu_si128((const __m128i *)(const void *)(s + i));
+        if (_mm_movemask_epi8(chunk) != 0) {
+            break;
+        }
+        i += 16;
+    }
+#endif
+    while (i + 8 <= n) {
+        uint64_t word;
+        memcpy(&word, s + i, 8);
+        if ((word & 0x8080808080808080ULL) != 0) {
+            break;
+        }
+        i += 8;
+    }
     while (i < n) {
         uint8_t c = s[i];
         size_t need;

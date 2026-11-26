@@ -1012,6 +1012,67 @@ static void check_bulk_copy(void) {
     kiln_arena_free(arena);
 }
 
+static void check_cursor(void) {
+    uint8_t buf[256];
+    kiln_writer w;
+    kiln_reader r;
+    const double vals[3] = {1.5, -0.0, 42.25};
+    double back_vals[3] = {0};
+    char label[64];
+    int b = 0;
+    int32_t i32 = 0;
+    int64_t i64 = 0;
+    uint32_t n = 0;
+    size_t len, bad;
+
+    for (len = 0; len <= 40; len++) {
+        uint8_t ascii[40];
+        memset(ascii, 'a', len);
+        if (!kiln_utf8_fast(ascii, len) || !kiln_utf8_ok(ascii, len)) {
+            die("utf8 valid ascii");
+        }
+        for (bad = 0; bad < len; bad++) {
+            ascii[bad] = 0xFFu;
+            if (kiln_utf8_fast(ascii, len) || kiln_utf8_ok(ascii, len)) {
+                die("utf8 invalid byte");
+            }
+            ascii[bad] = 'a';
+        }
+    }
+
+    kiln_writer_init(&w, buf, sizeof buf);
+    if (kiln_writer_bool(&w, 1) != KILN_OK ||
+        kiln_writer_i32(&w, -7) != KILN_OK ||
+        kiln_writer_i64(&w, 9000000000LL) != KILN_OK ||
+        kiln_writer_cstr(&w, "0123456789abcdef-utf8-\xC3\xA9") != KILN_OK ||
+        kiln_writer_pod(&w, vals, 3, 8) != KILN_OK) {
+        die("cursor write");
+    }
+
+    kiln_reader_init(&r, buf, w.pos, NULL);
+    if (kiln_reader_bool(&r, &b) != KILN_OK || b != 1 ||
+        kiln_reader_i32(&r, &i32) != KILN_OK || i32 != -7 ||
+        kiln_reader_i64(&r, &i64) != KILN_OK || i64 != 9000000000LL ||
+        kiln_reader_cstr(&r, label, sizeof label) != KILN_OK ||
+        strcmp(label, "0123456789abcdef-utf8-\xC3\xA9") != 0 ||
+        kiln_reader_pod(&r, back_vals, 3, 8, &n) != KILN_OK || n != 3 ||
+        kiln_reader_finish(&r) != KILN_OK) {
+        die("cursor read");
+    }
+    if (memcmp(vals, back_vals, sizeof vals) != 0) {
+        die("cursor pod bits");
+    }
+
+    buf[w.pos] = 0;
+    kiln_reader_init(&r, buf, w.pos + 1, NULL);
+    if (kiln_reader_bool(&r, &b) != KILN_OK || kiln_reader_i32(&r, &i32) != KILN_OK ||
+        kiln_reader_i64(&r, &i64) != KILN_OK || kiln_reader_cstr(&r, label, sizeof label) != KILN_OK ||
+        kiln_reader_pod(&r, back_vals, 3, 8, &n) != KILN_OK ||
+        kiln_reader_finish(&r) != KILN_ERR_TRAILING) {
+        die("cursor trailing");
+    }
+}
+
 int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "roundtrip") == 0) {
         return roundtrip_main(argc, argv, 0);
@@ -1021,5 +1082,6 @@ int main(int argc, char **argv) {
     }
     check_hash();
     check_bulk_copy();
+    check_cursor();
     return run_cases();
 }
